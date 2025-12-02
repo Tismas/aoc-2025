@@ -33,7 +33,7 @@ getPassesAndStopsAt0 (first : rest) currentValue zeros = getPassesAndStopsAt0 re
 
 main :: IO ()
 main = do
-  let test = True
+  let test = False
   input <- if test then readFile "./src/day1/test.txt" else readFile "./src/day1/input.txt"
 
   let inputLines = lines input
