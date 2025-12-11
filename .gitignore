@@ -1,1 +1,6 @@
 input.txt
+
+stack.*
+package.yaml
+*.cabal
+.stack-work
