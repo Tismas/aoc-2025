@@ -1,6 +1,7 @@
-import Z3.Monad
-import Control.Monad (forM, forM_)
-import Data.Maybe (catMaybes)
+import Control.Monad.State
+import Data.Function (on)
+import Data.List (minimumBy, subsequences)
+import Data.Map qualified as M
 
 data Machine = Machine
   { lights :: String,
@@ -8,6 +9,8 @@ data Machine = Machine
     joltage :: [Int]
   }
   deriving (Show)
+
+type Cache = M.Map [Int] Int
 
 split :: Char -> String -> [String]
 split _ "" = []
@@ -41,55 +44,48 @@ toggleLight c = if c == '.' then '#' else '.'
 toggleLights :: String -> [Int] -> String
 toggleLights lights indexes = [if i `elem` indexes then toggleLight value else value | (i, value) <- zip [0 ..] lights]
 
-solveLights :: [String] -> String -> [[Int]] -> Int -> Int
-solveLights lightsArr targetLights buttons presses
-  | found = presses + 1
-  | otherwise = solveLights toggled targetLights buttons (presses + 1)
+solveLights :: String -> [[Int]] -> [[[Int]]]
+solveLights targetLights buttons = solutions
   where
-    toggled = [toggleLights lights button | button <- buttons, lights <- lightsArr]
-    found = targetLights `elem` toggled
+    options = subsequences buttons
+    lights = replicate (length targetLights) '.'
+    toggled = [foldl toggleLights lights pressedButtons | pressedButtons <- options]
+    solutions = [options !! index | (value, index) <- zip toggled [0 .. length toggled - 1], value == targetLights]
 
-solveButtons :: [[Int]] -> [Int] -> IO Double
-solveButtons buttons target = evalZ3 $ do
-  let nButtons = length buttons
-  vars <- mapM (\i -> mkStringSymbol ("x_" ++ show i) >>= mkIntVar) [0 .. nButtons - 1]
+getNewTarget :: [Int] -> [[Int]] -> [Int]
+getNewTarget target presses = [(target !! i - length (filter (\v -> i `elem` v) presses)) `div` 2 | i <- [0 .. length target - 1]]
 
-  zero <- mkInteger 0
-  mapM_ (\v -> mkGe v zero >>= assert) vars
+solveButtons :: [[Int]] -> [Int] -> State Cache Int
+solveButtons buttons target = do
+  cache <- get
+  case M.lookup target cache of
+    Just v -> return v
+    Nothing -> do
+      res <-
+        if done
+          then
+            return 0
+          else
+            if invalid
+              then
+                return 100_000
+              else do
+                values <- mapM totalValue solutions
+                return (minimum values)
+      modify (M.insert target res)
+      return res
+  where
+    done = all (== 0) target
+    oddToLights = map (\x -> if x `mod` 2 == 1 then '#' else '.') target
+    solutions = solveLights oddToLights buttons
+    invalid = any (< 0) target || null solutions
 
-  mapM_ (\(dimIdx, tgtVal) -> do
-      tgt <- mkInteger (fromIntegral tgtVal)
-      terms <- mapM (\(j, v) -> do
-          let btn = buttons !! j
-          if dimIdx `elem` btn
-            then return (Just v)
-            else return Nothing
-        ) (zip [0..] vars)
-      let activeVars = catMaybes terms
-      sumTerm <- if null activeVars then mkInteger 0 else mkAdd activeVars
-      mkEq sumTerm tgt >>= assert
-    ) (zip [0..] target)
+    totalValue presses = do
+      sub <- solveButtons buttons (getNewTarget target presses)
+      return (length presses + 2 * sub)
 
-  totalPresses <- mkAdd vars
-  
-  let loop currentMin = do
-        result <- solverCheck
-        case result of
-          Sat -> do
-            model <- solverGetModel
-            sumVal <- evalInt model totalPresses
-            case sumVal of
-              Just s -> do
-                sAst <- mkInteger s
-                mkLt totalPresses sAst >>= assert
-                loop (Just s)
-              Nothing -> return currentMin
-          _ -> return currentMin
-
-  finalMin <- loop Nothing
-  case finalMin of
-    Just val -> return (fromIntegral val)
-    Nothing -> error "No feasible button combination"
+runSolveButtons :: [[Int]] -> [Int] -> Int
+runSolveButtons buttons target = evalState (solveButtons buttons target) M.empty
 
 main :: IO ()
 main = do
@@ -98,8 +94,9 @@ main = do
 
   let inputLines = lines input
   let machines = map parseLine inputLines
-  let part1 = [solveLights [replicate (length (lights machine)) '.'] (lights machine) (buttons machine) 0 | machine <- machines]
-  print (sum part1)
+  let part1Solutions = [solveLights (lights machine) (buttons machine) | machine <- machines]
+  let part1 = map (minimumBy (compare `on` length)) part1Solutions
+  print (sum (map length part1))
 
-  part2 <- mapM (\machine -> solveButtons (buttons machine) (joltage machine)) machines
+  let part2 = [runSolveButtons (buttons machine) (joltage machine) | machine <- machines]
   print (sum part2)
